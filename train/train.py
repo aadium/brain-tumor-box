@@ -86,13 +86,13 @@ EPOCHS = 20
 LEARNING_RATE = 0.005
 my_transform = transforms.Compose([transforms.ToTensor()])
 
-train_dataset = CocoDetection(root='dataset/train', annFile='dataset/train/_annotations.coco.json', transform=my_transform)
+train_dataset = CocoDetection(root='../dataset/train', annFile='../dataset/train/_annotations.coco.json', transform=my_transform)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True)
 
-test_dataset = CocoDetection(root='dataset/test', annFile='dataset/test/_annotations.coco.json', transform=my_transform)
+test_dataset = CocoDetection(root='../dataset/test', annFile='../dataset/test/_annotations.coco.json', transform=my_transform)
 test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True)
 
-valid_dataset = CocoDetection(root='dataset/valid', annFile='dataset/valid/_annotations.coco.json', transform=my_transform)
+valid_dataset = CocoDetection(root='../dataset/valid', annFile='../dataset/valid/_annotations.coco.json', transform=my_transform)
 valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True)
 
 # Class mapping
@@ -136,8 +136,8 @@ metric = MeanAveragePrecision(box_format='xyxy', class_metrics=True)
 early_stopper = EarlyStopping(patience=3)
 best_val_map = -1.0
 
-os.makedirs("checkpoints", exist_ok=True)
-os.makedirs("models", exist_ok=True)
+os.makedirs("../checkpoints", exist_ok=True)
+os.makedirs("../models", exist_ok=True)
 
 for epoch in range(EPOCHS):
     model.train()
@@ -182,7 +182,7 @@ for epoch in range(EPOCHS):
     # Save Best Model Check
     if current_mAP > best_val_map:
         best_val_map = current_mAP
-        torch.save(model.state_dict(), "models/bt_fasterrcnn_best.pth")
+        torch.save(model.state_dict(), "../models/bt_fasterrcnn_best.pth")
         wandb.save("models/bt_fasterrcnn_best.pth")
         print(f"New Best: {best_val_map:.4f}")
 
