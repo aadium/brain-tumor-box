@@ -183,13 +183,13 @@ for epoch in range(EPOCHS):
     if current_mAP > best_val_map:
         best_val_map = current_mAP
         torch.save(model.state_dict(), "../models/bt_fasterrcnn_best.pth")
-        wandb.save("models/bt_fasterrcnn_best.pth")
+        wandb.save("../models/bt_fasterrcnn_best.pth", policy="now")
         print(f"New Best: {best_val_map:.4f}")
 
     # Save General Checkpoint
     checkpoint = {'epoch': epoch, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(), 'mAP_50': current_mAP}
     torch.save(checkpoint, f"../checkpoints/checkpoint_epoch_{epoch}.pt")
-    wandb.save(f"checkpoints/checkpoint_epoch_{epoch}.pt")
+    wandb.save(f"../checkpoints/checkpoint_epoch_{epoch}.pt", policy="now")
     
     print(f"Epoch {epoch} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}")
 
