@@ -188,7 +188,7 @@ for epoch in range(EPOCHS):
 
     # Save General Checkpoint
     checkpoint = {'epoch': epoch, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(), 'mAP_50': current_mAP}
-    torch.save(checkpoint, f"checkpoints/checkpoint_epoch_{epoch}.pt")
+    torch.save(checkpoint, f"../checkpoints/checkpoint_epoch_{epoch}.pt")
     wandb.save(f"checkpoints/checkpoint_epoch_{epoch}.pt")
     
     print(f"Epoch {epoch} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}")
