@@ -82,7 +82,7 @@ class EarlyStopping:
 
 # Config
 BATCH_SIZE = 64
-EPOCHS = 15
+EPOCHS = 20
 LEARNING_RATE = 0.005
 my_transform = transforms.Compose([transforms.ToTensor()])
 
