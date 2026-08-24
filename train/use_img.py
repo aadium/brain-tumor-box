@@ -4,8 +4,8 @@ import torchvision
 from torchvision.transforms import functional as F
 from PIL import Image, ImageDraw
 
-MODEL_PATH = "models/bt_fasterrcnn_best.pth"
-IMAGE_PATH = "images/image.png"
+MODEL_PATH = "../models/bt_fasterrcnn_best.pth"
+IMAGE_PATH = "../images/image.jpg"
 THRESHOLD = 0.8
 NUM_CLASSES = 4
 CLASS_NAMES = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
@@ -47,6 +47,6 @@ for i in range(len(prediction['boxes'])):
         draw.rectangle(crop_box, outline=color, width=3)
 
 faded_img.show()
-os.makedirs("results", exist_ok=True)
-faded_img.save("results/detection_result5.png")
+os.makedirs("../results", exist_ok=True)
+faded_img.save("../results/detection_result5.png")
 print(f"Done! Found {sum(prediction['scores'] > THRESHOLD)} objects.")

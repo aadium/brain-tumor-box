@@ -81,8 +81,8 @@ class EarlyStopping:
             self.counter = 0
 
 # Config
-BATCH_SIZE = 64
-EPOCHS = 20
+BATCH_SIZE = 16
+EPOCHS = 50
 LEARNING_RATE = 0.005
 my_transform = transforms.Compose([transforms.ToTensor()])
 
@@ -171,6 +171,10 @@ for epoch in range(EPOCHS):
             preds = [{k: v.to('cpu') for k, v in out.items()} for out in outputs]
             target_list = [{k: v.to('cpu') for k, v in t.items()} for t in targets]
             metric.update(preds, target_list)
+
+            del images, outputs, preds, target_list
+    
+    torch.cuda.empty_cache()
 
     result = metric.compute() 
     current_mAP = result["map_50"].item()
