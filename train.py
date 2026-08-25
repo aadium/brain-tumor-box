@@ -1,21 +1,38 @@
 import os
 import torch
 from PIL import Image
+import numpy as np
 from torch.utils.data import Dataset
 from pycocotools.coco import COCO
 import torchvision
-from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torch.amp import autocast, GradScaler
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
-# Dataset definition
+# Albumentations with Bounding Box Transforms
+def get_transforms(is_train=True):
+    if is_train:
+        return A.Compose([
+            A.HorizontalFlip(p=0.5),
+            A.RandomBrightnessContrast(p=0.2),
+            A.ColorJitter(p=0.2),
+            ToTensorV2()
+        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+    else:
+        return A.Compose([
+            ToTensorV2()
+        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+
+# Dataset with Proper Contiguous Category Mapping
 class CocoDetection(Dataset):
-    def __init__(self, root, annFile, transform=None):
+    def __init__(self, root, annFile, transform=None, category_id_map=None):
         self.root = root
         self.coco = COCO(annFile)
         self.ids = list(sorted(self.coco.imgs.keys()))
         self.transform = transform
+        self.category_id_map = category_id_map
 
     def __getitem__(self, index):
         coco = self.coco
@@ -25,33 +42,44 @@ class CocoDetection(Dataset):
         
         path = coco.loadImgs(img_id)[0]['file_name']
         img = Image.open(os.path.join(self.root, path)).convert('RGB')
+        img_np = np.array(img)
 
         boxes = []
         labels = []
         for ann in coco_annotation:
             xmin = float(ann['bbox'][0])
             ymin = float(ann['bbox'][1])
-            xmax = xmin + float(ann['bbox'][2])
-            ymax = ymin + float(ann['bbox'][3])
+            w = float(ann['bbox'][2])
+            h = float(ann['bbox'][3])
+            xmax = xmin + w
+            ymax = ymin + h
     
-            if (xmax > xmin) and (ymax > ymin) and (ann['category_id'] > 0):
+            # Guard against invalid dimensions or unknown category mappings
+            if (xmax > xmin + 1) and (ymax > ymin + 1) and (ann['category_id'] in self.category_id_map):
                 boxes.append([xmin, ymin, xmax, ymax])
-                labels.append(ann['category_id'])
-
-        # If no objects remain after filtering, provide a dummy background box
-        if len(boxes) == 0:
-            boxes = torch.tensor([[0, 0, 1, 1]], dtype=torch.float32)
-            labels = torch.tensor([0], dtype=torch.int64) 
-        else:
-            boxes = torch.as_tensor(boxes, dtype=torch.float32)
-            labels = torch.as_tensor(labels, dtype=torch.int64)
-
-        target = {"boxes": boxes, "labels": labels, "image_id": torch.tensor([img_id])}
+                labels.append(self.category_id_map[ann['category_id']])
 
         if self.transform:
-            img = self.transform(img)
+            transformed = self.transform(image=img_np, bboxes=boxes, labels=labels)
+            img_tensor = transformed['image'] / 255.0  # Normalize float image
+            boxes = transformed['bboxes']
+            labels = transformed['labels']
 
-        return img, target
+        # Correct PyTorch structure for negative/empty samples
+        if len(boxes) == 0:
+            boxes_tensor = torch.zeros((0, 4), dtype=torch.float32)
+            labels_tensor = torch.zeros((0,), dtype=torch.int64)
+        else:
+            boxes_tensor = torch.as_tensor(boxes, dtype=torch.float32)
+            labels_tensor = torch.as_tensor(labels, dtype=torch.int64)
+
+        target = {
+            "boxes": boxes_tensor,
+            "labels": labels_tensor,
+            "image_id": torch.tensor([img_id])
+        }
+
+        return img_tensor, target
 
     def __len__(self):
         return len(self.ids)
@@ -59,70 +87,42 @@ class CocoDetection(Dataset):
 def collate_fn(batch):
     return tuple(zip(*batch))
 
-class EarlyStopping:
-    def __init__(self, patience=3, min_delta=0):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.best_score = None
-        self.early_stop = False
+BATCH_SIZE = 8  # Reduced batch size for fine spatial resolution
+EPOCHS = 30
 
-    def __call__(self, current_score):
-        if self.best_score is None:
-            self.best_score = current_score
-        elif current_score < self.best_score + self.min_delta:
-            self.counter += 1
-            print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_score = current_score
-            self.counter = 0
+train_coco_raw = COCO('dataset/train/_annotations.coco.json')
+cat_ids = sorted(train_coco_raw.getCatIds())
 
-# Config
-BATCH_SIZE = 16
-EPOCHS = 50
-LEARNING_RATE = 0.005
-my_transform = transforms.Compose([transforms.ToTensor()])
+# Map arbitrary dataset IDs to contiguous 1..N indices (0 reserved for background)
+category_id_map = {orig_id: i + 1 for i, orig_id in enumerate(cat_ids)}
+num_classes = len(category_id_map) + 1  
 
-train_dataset = CocoDetection(root='dataset/train', annFile='dataset/train/_annotations.coco.json', transform=my_transform)
-train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True)
+train_dataset = CocoDetection('dataset/train', 'dataset/train/_annotations.coco.json', 
+                              transform=get_transforms(is_train=True), category_id_map=category_id_map)
+valid_dataset = CocoDetection('dataset/valid', 'dataset/valid/_annotations.coco.json', 
+                              transform=get_transforms(is_train=False), category_id_map=category_id_map)
 
-test_dataset = CocoDetection(root='dataset/test', annFile='dataset/test/_annotations.coco.json', transform=my_transform)
-test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
+valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, 
+                                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
 
-valid_dataset = CocoDetection(root='dataset/valid', annFile='dataset/valid/_annotations.coco.json', transform=my_transform)
-valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=4, pin_memory=True, persistent_workers=True)
-
-# Class mapping
-cat_ids = train_dataset.coco.getCatIds()
-cats = train_dataset.coco.loadCats(cat_ids)
-# num_classes must be max_id + 1 to account for index 0
-num_classes = max(cat_ids) + 1 
-class_names = {cat['id']: cat['name'] for cat in cats}
-class_names[0] = "background"
-
-print(f"Detected Categories: {class_names}")
-print(f"Model num_classes set to: {num_classes}")
-
-# Model init
 def get_model(num_classes):
-    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT", min_size=480, max_size=640)
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT", min_size=800, max_size=1333)
     in_features = model.roi_heads.box_predictor.cls_score.in_features
     model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     return model
 
 model = get_model(num_classes).to('cuda')
-optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=LEARNING_RATE, momentum=0.9, weight_decay=0.0005)
-lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
-# Training loop
-scaler = GradScaler()
-metric = MeanAveragePrecision(box_format='xyxy', class_metrics=True)
-early_stopper = EarlyStopping(patience=3)
+optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=1e-4, weight_decay=1e-4)
+lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
+
+use_bfloat16 = torch.cuda.is_bf16_supported()
+scaler = GradScaler(enabled=not use_bfloat16) 
+metric = MeanAveragePrecision(box_format='xyxy', class_metrics=False)
+
 best_val_map = -1.0
-
-os.makedirs("checkpoints", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
 for epoch in range(EPOCHS):
@@ -134,19 +134,26 @@ for epoch in range(EPOCHS):
         targets = [{k: v.to('cuda') for k, v in t.items()} for t in targets]
 
         optimizer.zero_grad()
-        with autocast(device_type='cuda', dtype=torch.float16):
+        amp_dtype = torch.bfloat16 if use_bfloat16 else torch.float16
+        
+        with autocast(device_type='cuda', dtype=amp_dtype):
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
 
-        scaler.scale(losses).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        if use_bfloat16:
+            losses.backward()
+            optimizer.step()
+        else:
+            scaler.scale(losses).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
         epoch_loss += losses.item()
     
     avg_loss = epoch_loss / len(train_loader)
     lr_scheduler.step()
 
-    # Validation
+    # Validation Pass
     model.eval()
     metric.reset()
     with torch.no_grad():
@@ -157,27 +164,12 @@ for epoch in range(EPOCHS):
             target_list = [{k: v.to('cpu') for k, v in t.items()} for t in targets]
             metric.update(preds, target_list)
 
-            del images, outputs, preds, target_list
-    
-    torch.cuda.empty_cache()
-
     result = metric.compute() 
     current_mAP = result["map_50"].item()
 
-    # Save Best Model Check
+    print(f"Epoch {epoch:02d} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}")
+
     if current_mAP > best_val_map:
         best_val_map = current_mAP
-        torch.save(model.state_dict(), "models/bt_fasterrcnn_best.pth")
-        print(f"New Best: {best_val_map:.4f}")
-
-    # Save General Checkpoint
-    checkpoint = {'epoch': epoch, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(), 'mAP_50': current_mAP}
-    torch.save(checkpoint, f"checkpoints/checkpoint_epoch_{epoch}.pt")
-    
-    print(f"Epoch {epoch} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}")
-
-    early_stopper(current_mAP)
-    if early_stopper.early_stop:
-        print("Early stopping triggered."); break
-
-    print('=============================================================================')
+        torch.save(model.state_dict(), "models/fasterrcnn_best.pth")
+        print(f"--> Saved New Best Model (mAP@50: {best_val_map:.4f})")
