@@ -8,7 +8,6 @@ from torchvision import transforms
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from torch.amp import autocast, GradScaler
-import wandb
 
 # Dataset definition
 class CocoDetection(Dataset):
@@ -117,19 +116,6 @@ model = get_model(num_classes).to('cuda')
 optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=LEARNING_RATE, momentum=0.9, weight_decay=0.0005)
 lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
 
-wandb.init(
-    project="faster-rcnn-brain-tumor",
-    name="Brain Tumor Detector",
-    config={
-        "learning_rate": LEARNING_RATE,
-        "architecture": "Faster-RCNN-ResNet50",
-        "dataset": "neuron-m1yxd/brain-tumor-ppo4z",
-        "class_map": class_names,
-        "epochs": EPOCHS,
-        "batch_size": BATCH_SIZE
-    }
-)
-
 # Training loop
 scaler = GradScaler()
 metric = MeanAveragePrecision(box_format='xyxy', class_metrics=True)
@@ -155,7 +141,6 @@ for epoch in range(EPOCHS):
         scaler.scale(losses).backward()
         scaler.step(optimizer)
         scaler.update()
-        wandb.log({"batch_loss": losses.item()})
         epoch_loss += losses.item()
     
     avg_loss = epoch_loss / len(train_loader)
@@ -179,21 +164,15 @@ for epoch in range(EPOCHS):
     result = metric.compute() 
     current_mAP = result["map_50"].item()
 
-    wandb.log({
-        "epoch": epoch, "train/loss": avg_loss, "val/mAP_50": current_mAP, "train/lr": optimizer.param_groups[0]['lr']
-    })
-
     # Save Best Model Check
     if current_mAP > best_val_map:
         best_val_map = current_mAP
         torch.save(model.state_dict(), "models/bt_fasterrcnn_best.pth")
-        wandb.save("models/bt_fasterrcnn_best.pth", policy="now")
         print(f"New Best: {best_val_map:.4f}")
 
     # Save General Checkpoint
     checkpoint = {'epoch': epoch, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(), 'mAP_50': current_mAP}
     torch.save(checkpoint, f"checkpoints/checkpoint_epoch_{epoch}.pt")
-    wandb.save(f"checkpoints/checkpoint_epoch_{epoch}.pt", policy="now")
     
     print(f"Epoch {epoch} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}")
 
@@ -202,5 +181,3 @@ for epoch in range(EPOCHS):
         print("Early stopping triggered."); break
 
     print('=============================================================================')
-
-wandb.finish()
