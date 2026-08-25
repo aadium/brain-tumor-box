@@ -11,7 +11,7 @@ from torch.amp import autocast, GradScaler
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
-# Albumentations with Bounding Box Transforms
+# Transforms
 def get_transforms(is_train=True):
     if is_train:
         return A.Compose([
@@ -21,9 +21,10 @@ def get_transforms(is_train=True):
             ToTensorV2()
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
     else:
+        # Omit bbox_params during validation to prevent Albumentations warnings
         return A.Compose([
             ToTensorV2()
-        ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+        ])
 
 # Early Stopping Helper Class
 class EarlyStopping:
@@ -39,14 +40,15 @@ class EarlyStopping:
             self.best_score = current_score
         elif current_score < self.best_score + self.min_delta:
             self.counter += 1
-            print(f"--> EarlyStopping counter: {self.counter} out of {self.patience}")
-            if self.counter >= self.patience:
-                self.early_stop = True
+            log_msg = f"--> EarlyStopping counter: {self.counter} out of {self.patience}"
+            print(log_msg)
+            return log_msg
         else:
             self.best_score = current_score
             self.counter = 0
+        return None
 
-# Dataset with Proper Contiguous Category Mapping
+# Dataset Setup
 class CocoDetection(Dataset):
     def __init__(self, root, annFile, transform=None, category_id_map=None):
         self.root = root
@@ -75,18 +77,20 @@ class CocoDetection(Dataset):
             xmax = xmin + w
             ymax = ymin + h
     
-            # Guard against invalid dimensions or unknown category mappings
             if (xmax > xmin + 1) and (ymax > ymin + 1) and (ann['category_id'] in self.category_id_map):
                 boxes.append([xmin, ymin, xmax, ymax])
                 labels.append(self.category_id_map[ann['category_id']])
 
         if self.transform:
-            transformed = self.transform(image=img_np, bboxes=boxes, labels=labels)
-            img_tensor = transformed['image'] / 255.0  # Normalize float image
-            boxes = transformed['bboxes']
-            labels = transformed['labels']
+            # Handle train (with bboxes) vs valid (without bbox_params in transform)
+            if len(boxes) > 0 and 'bbox_params' in self.transform.processors:
+                transformed = self.transform(image=img_np, bboxes=boxes, labels=labels)
+                boxes = transformed['bboxes']
+                labels = transformed['labels']
+            else:
+                transformed = self.transform(image=img_np)
+            img_tensor = transformed['image'] / 255.0
 
-        # Correct PyTorch structure for negative/empty samples
         if len(boxes) == 0:
             boxes_tensor = torch.zeros((0, 4), dtype=torch.float32)
             labels_tensor = torch.zeros((0,), dtype=torch.int64)
@@ -108,24 +112,34 @@ class CocoDetection(Dataset):
 def collate_fn(batch):
     return tuple(zip(*batch))
 
+# Configurations & Directory Initialization
 BATCH_SIZE = 8
 EPOCHS = 30
 PATIENCE = 3
+LOG_FILE = "train_log.txt"
 
+os.makedirs("models", exist_ok=True)
+os.makedirs("checkpoints", exist_ok=True)
+
+# Function to write lines live to log file
+def write_log(text, file_path=LOG_FILE):
+    print(text)
+    with open(file_path, "a") as f:
+        f.write(text + "\n")
+
+# Prepare categories
 train_coco_raw = COCO('dataset/train/_annotations.coco.json')
-# Fetch categories and exclude any explicit 'background' category in the JSON
 cat_ids = [
     cat['id'] for cat in train_coco_raw.loadCats(train_coco_raw.getCatIds()) 
     if cat['name'].lower() != 'background' and cat['id'] > 0
 ]
 cat_ids.sort()
 
-# Maps the 3 tumor classes to 1, 2, 3
 category_id_map = {orig_id: i + 1 for i, orig_id in enumerate(cat_ids)}
-
-# Exactly 3 + 1 = 4
 num_classes = len(category_id_map) + 1  
-print(f"Final Model num_classes: {num_classes}")
+
+write_log(f"--- Starting New Training Session ---")
+write_log(f"Final Model num_classes: {num_classes}")
 
 train_dataset = CocoDetection('dataset/train', 'dataset/train/_annotations.coco.json', 
                               transform=get_transforms(is_train=True), category_id_map=category_id_map)
@@ -137,6 +151,7 @@ train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BATCH_SIZE,
 valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False, 
                                            collate_fn=collate_fn, num_workers=4, pin_memory=True)
 
+# Model Setup
 def get_model(num_classes):
     model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT", min_size=800, max_size=1333)
     in_features = model.roi_heads.box_predictor.cls_score.in_features
@@ -154,8 +169,8 @@ metric = MeanAveragePrecision(box_format='xyxy', class_metrics=False)
 early_stopper = EarlyStopping(patience=PATIENCE, min_delta=0.001)
 
 best_val_map = -1.0
-os.makedirs("models", exist_ok=True)
 
+# Training Loop with Logging & Checkpointing
 for epoch in range(EPOCHS):
     model.train()
     epoch_loss = 0
@@ -182,6 +197,7 @@ for epoch in range(EPOCHS):
         epoch_loss += losses.item()
     
     avg_loss = epoch_loss / len(train_loader)
+    current_lr = lr_scheduler.get_last_lr()[0]
     lr_scheduler.step()
 
     # Validation Pass
@@ -198,14 +214,32 @@ for epoch in range(EPOCHS):
     result = metric.compute() 
     current_mAP = result["map_50"].item()
 
-    print(f"Epoch {epoch:02d} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}")
+    # Output metric log to text file and console
+    log_line = f"Epoch {epoch:02d} | LR: {current_lr:.6f} | Loss: {avg_loss:.4f} | mAP@50: {current_mAP:.4f}"
+    write_log(log_line)
 
+    # Save full state checkpoint after every epoch
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'lr_scheduler_state_dict': lr_scheduler.state_dict(),
+        'mAP_50': current_mAP,
+        'loss': avg_loss
+    }
+    torch.save(checkpoint, f"checkpoints/checkpoint_epoch_{epoch:02d}.pt")
+
+    # Update best model weights
     if current_mAP > best_val_map:
         best_val_map = current_mAP
         torch.save(model.state_dict(), "models/fasterrcnn_best.pth")
-        print(f"--> Saved New Best Model (mAP@50: {best_val_map:.4f})")
+        write_log(f"--> Saved New Best Model (mAP@50: {best_val_map:.4f})")
     
-    early_stopper(current_mAP)
+    # Check early stopping
+    es_msg = early_stopper(current_mAP)
+    if es_msg:
+        write_log(es_msg)
+        
     if early_stopper.early_stop:
-        print(f"\n[!] Early stopping triggered at Epoch {epoch}. Best mAP@50 reached: {best_val_map:.4f}")
+        write_log(f"\n[!] Early stopping triggered at Epoch {epoch}. Best mAP@50 reached: {best_val_map:.4f}")
         break
