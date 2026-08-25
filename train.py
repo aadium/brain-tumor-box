@@ -21,7 +21,7 @@ def get_transforms(is_train=True):
             ToTensorV2()
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
     else:
-        # Omit bbox_params during validation to prevent Albumentations warnings
+        # Validation uses image-only transforms (no bboxes needed in albumentations pipeline)
         return A.Compose([
             ToTensorV2()
         ])
@@ -50,12 +50,13 @@ class EarlyStopping:
 
 # Dataset Setup
 class CocoDetection(Dataset):
-    def __init__(self, root, annFile, transform=None, category_id_map=None):
+    def __init__(self, root, annFile, transform=None, category_id_map=None, is_train=True):
         self.root = root
         self.coco = COCO(annFile)
         self.ids = list(sorted(self.coco.imgs.keys()))
         self.transform = transform
         self.category_id_map = category_id_map
+        self.is_train = is_train
 
     def __getitem__(self, index):
         coco = self.coco
@@ -82,13 +83,15 @@ class CocoDetection(Dataset):
                 labels.append(self.category_id_map[ann['category_id']])
 
         if self.transform:
-            # Handle train (with bboxes) vs valid (without bbox_params in transform)
-            if len(boxes) > 0 and 'bbox_params' in self.transform.processors:
+            if self.is_train:
+                # Training: Pass bboxes and labels (Albumentations natively handles empty lists)
                 transformed = self.transform(image=img_np, bboxes=boxes, labels=labels)
                 boxes = transformed['bboxes']
                 labels = transformed['labels']
             else:
+                # Validation: Pass image only
                 transformed = self.transform(image=img_np)
+            
             img_tensor = transformed['image'] / 255.0
 
         if len(boxes) == 0:
@@ -142,9 +145,9 @@ write_log(f"--- Starting New Training Session ---")
 write_log(f"Final Model num_classes: {num_classes}")
 
 train_dataset = CocoDetection('dataset/train', 'dataset/train/_annotations.coco.json', 
-                              transform=get_transforms(is_train=True), category_id_map=category_id_map)
+                              transform=get_transforms(is_train=True), category_id_map=category_id_map, is_train=True)
 valid_dataset = CocoDetection('dataset/valid', 'dataset/valid/_annotations.coco.json', 
-                              transform=get_transforms(is_train=False), category_id_map=category_id_map)
+                              transform=get_transforms(is_train=False), category_id_map=category_id_map, is_train=False)
 
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
                                            collate_fn=collate_fn, num_workers=4, pin_memory=True)

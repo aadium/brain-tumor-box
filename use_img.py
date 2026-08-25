@@ -5,7 +5,7 @@ from torchvision.transforms import functional as F
 from PIL import Image, ImageDraw
 
 MODEL_PATH = "models/fasterrcnn_best.pth"
-IMAGE_PATH = "images/gli2.jpg"
+IMAGE_PATH = "images/pit1.jpg"
 THRESHOLD = 0.6
 
 NUM_CLASSES = 4  # 0: background + 3 classes

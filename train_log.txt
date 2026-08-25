@@ -1,0 +1,14 @@
+--- Starting New Training Session ---
+Final Model num_classes: 4
+Epoch 00 | LR: 0.000100 | Loss: 0.1914 | mAP@50: 0.7458
+--> Saved New Best Model (mAP@50: 0.7458)
+Epoch 01 | LR: 0.000100 | Loss: 0.1252 | mAP@50: 0.8374
+--> Saved New Best Model (mAP@50: 0.8374)
+Epoch 02 | LR: 0.000099 | Loss: 0.1063 | mAP@50: 0.8580
+--> Saved New Best Model (mAP@50: 0.8580)
+Epoch 03 | LR: 0.000098 | Loss: 0.0962 | mAP@50: 0.8457
+--> EarlyStopping counter: 1 out of 3
+Epoch 04 | LR: 0.000096 | Loss: 0.0836 | mAP@50: 0.8746
+--> Saved New Best Model (mAP@50: 0.8746)
+Epoch 05 | LR: 0.000093 | Loss: 0.0781 | mAP@50: 0.8780
+--> Saved New Best Model (mAP@50: 0.8780)
