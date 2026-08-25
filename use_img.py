@@ -31,7 +31,11 @@ with torch.no_grad():
 
 faded_img = Image.eval(img, lambda x: int(x * 0.3))
 draw = ImageDraw.Draw(faded_img)
-COLOR_MAP = {1: "#CCFF00", 2: "#00FFFF"}
+COLOR_MAP = {
+    1: "red",      # glioma
+    2: "green",    # meningioma
+    3: "blue"      # pituitary
+}
 
 for i in range(len(prediction['boxes'])):
     score = prediction['scores'][i].item()
