@@ -25,6 +25,27 @@ def get_transforms(is_train=True):
             ToTensorV2()
         ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
 
+# Early Stopping Helper Class
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.001):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, current_score):
+        if self.best_score is None:
+            self.best_score = current_score
+        elif current_score < self.best_score + self.min_delta:
+            self.counter += 1
+            print(f"--> EarlyStopping counter: {self.counter} out of {self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = current_score
+            self.counter = 0
+
 # Dataset with Proper Contiguous Category Mapping
 class CocoDetection(Dataset):
     def __init__(self, root, annFile, transform=None, category_id_map=None):
@@ -87,15 +108,24 @@ class CocoDetection(Dataset):
 def collate_fn(batch):
     return tuple(zip(*batch))
 
-BATCH_SIZE = 8  # Reduced batch size for fine spatial resolution
+BATCH_SIZE = 8
 EPOCHS = 30
+PATIENCE = 3
 
 train_coco_raw = COCO('dataset/train/_annotations.coco.json')
-cat_ids = sorted(train_coco_raw.getCatIds())
+# Fetch categories and exclude any explicit 'background' category in the JSON
+cat_ids = [
+    cat['id'] for cat in train_coco_raw.loadCats(train_coco_raw.getCatIds()) 
+    if cat['name'].lower() != 'background' and cat['id'] > 0
+]
+cat_ids.sort()
 
-# Map arbitrary dataset IDs to contiguous 1..N indices (0 reserved for background)
+# Maps the 3 tumor classes to 1, 2, 3
 category_id_map = {orig_id: i + 1 for i, orig_id in enumerate(cat_ids)}
+
+# Exactly 3 + 1 = 4
 num_classes = len(category_id_map) + 1  
+print(f"Final Model num_classes: {num_classes}")
 
 train_dataset = CocoDetection('dataset/train', 'dataset/train/_annotations.coco.json', 
                               transform=get_transforms(is_train=True), category_id_map=category_id_map)
@@ -121,6 +151,7 @@ lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCH
 use_bfloat16 = torch.cuda.is_bf16_supported()
 scaler = GradScaler(enabled=not use_bfloat16) 
 metric = MeanAveragePrecision(box_format='xyxy', class_metrics=False)
+early_stopper = EarlyStopping(patience=PATIENCE, min_delta=0.001)
 
 best_val_map = -1.0
 os.makedirs("models", exist_ok=True)
@@ -173,3 +204,8 @@ for epoch in range(EPOCHS):
         best_val_map = current_mAP
         torch.save(model.state_dict(), "models/fasterrcnn_best.pth")
         print(f"--> Saved New Best Model (mAP@50: {best_val_map:.4f})")
+    
+    early_stopper(current_mAP)
+    if early_stopper.early_stop:
+        print(f"\n[!] Early stopping triggered at Epoch {epoch}. Best mAP@50 reached: {best_val_map:.4f}")
+        break
