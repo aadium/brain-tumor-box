@@ -5,8 +5,8 @@ from torchvision.transforms import functional as F
 from PIL import Image, ImageDraw
 
 MODEL_PATH = "models/bt_fasterrcnn_best.pth"
-IMAGE_PATH = "images/image.jpg"
-THRESHOLD = 0.5
+IMAGE_PATH = "images/pit2.jpg"
+THRESHOLD = 0.6
 NUM_CLASSES = 4
 CLASS_NAMES = {0: "background", 1: "glioma", 2: "meningioma", 3: "pituitary"}
 
@@ -37,6 +37,8 @@ COLOR_MAP = {
     3: "blue"      # pituitary
 }
 
+print(prediction)
+
 for i in range(len(prediction['boxes'])):
     score = prediction['scores'][i].item()
     if score > THRESHOLD:
@@ -52,5 +54,6 @@ for i in range(len(prediction['boxes'])):
 
 faded_img.show()
 os.makedirs("results", exist_ok=True)
-faded_img.save("results/detection_result.png")
+img_name = os.path.splitext(os.path.basename(IMAGE_PATH))[0]
+faded_img.save(f"results/detection_result_{img_name}.png")
 print(f"Done! Found {sum(prediction['scores'] > THRESHOLD)} objects.")
