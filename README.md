@@ -119,7 +119,3 @@ python UI.py
 * **Evaluation Metric:** Mean Average Precision at IoU 0.5 (`mAP@50`).
 * **Early Stopping:** Monitored on validation `mAP@50` to avoid overfitting.
 * **Checkpoint States:** Includes optimizer, scheduler, model weights, epoch count, and validation loss.
-
-```
-
-```
