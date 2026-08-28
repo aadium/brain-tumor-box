@@ -4,7 +4,7 @@ import torchvision
 from torchvision.transforms import functional as F
 from PIL import Image, ImageDraw
 
-MODEL_PATH = "models/fasterrcnn_best.pth"
+MODEL_PATH = "models/bt_fasterrcnn_best.pth"
 IMAGE_PATH = "images/pit1.jpg"
 THRESHOLD = 0.6
 
